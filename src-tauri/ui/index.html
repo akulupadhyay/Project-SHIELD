@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Secure Portable Vault</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <main class="shell" aria-live="polite">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Secure Portable SSD/HDD Vault</p>
+          <h1 id="view-title">Vault Console</h1>
+        </div>
+        <div class="status-pill" id="mode-pill">Checking</div>
+      </header>
+
+      <section class="notice" id="notice" hidden></section>
+
+      <section class="panel status-panel">
+        <div>
+          <span class="label">Session</span>
+          <strong id="session-summary">Loading</strong>
+        </div>
+        <div>
+          <span class="label">Manifest</span>
+          <strong id="manifest-summary">Loading</strong>
+        </div>
+        <div>
+          <span class="label">Storage Root</span>
+          <strong id="storage-summary">Loading</strong>
+        </div>
+        <div>
+          <span class="label">Allowed Actions</span>
+          <strong id="actions-summary">Loading</strong>
+        </div>
+      </section>
+
+      <section class="grid">
+        <section class="panel" id="setup-panel" hidden>
+          <div class="section-head">
+            <h2>Initialize Vault</h2>
+            <p>Create user and admin credentials for this drive.</p>
+          </div>
+          <form id="initialize-form" autocomplete="off">
+            <label>
+              User Passphrase
+              <input id="init-user-passphrase" type="password" minlength="12" required />
+            </label>
+            <label>
+              Admin Passphrase
+              <input id="init-admin-passphrase" type="password" minlength="12" required />
+            </label>
+            <button type="submit">Initialize</button>
+          </form>
+        </section>
+
+        <section class="panel" id="login-panel" hidden>
+          <div class="section-head">
+            <h2>Login</h2>
+            <p>Backend state decides whether User, Admin, or Lockdown mode is active.</p>
+          </div>
+          <form id="login-form" autocomplete="off">
+            <label>
+              Role
+              <select id="login-role" required>
+                <option value="USER">User</option>
+                <option value="ADMIN">Admin</option>
+              </select>
+            </label>
+            <label>
+              Passphrase
+              <input id="login-passphrase" type="password" required />
+            </label>
+            <button type="submit">Login</button>
+          </form>
+        </section>
+
+        <section class="panel" id="user-panel" hidden>
+          <div class="section-head">
+            <h2>User Vault</h2>
+            <p>Upload, list, download, and request deletion for encrypted files.</p>
+          </div>
+
+          <form id="upload-form" class="compact-form" autocomplete="off">
+            <label>
+              Source File Path
+              <input id="upload-source-path" type="text" placeholder="Paste an absolute file path" required />
+            </label>
+            <label>
+              Mode
+              <select id="upload-mode">
+                <option value="FAST">Fast</option>
+                <option value="SUPER_SECURE">Super Secure</option>
+              </select>
+            </label>
+            <button type="submit">Upload</button>
+          </form>
+
+          <div class="upload-progress" id="upload-progress-panel" hidden>
+            <div class="progress-meta">
+              <strong id="upload-progress-stage">Preparing upload</strong>
+              <span id="upload-progress-percent">0%</span>
+            </div>
+            <progress id="upload-progress-bar" value="0" max="100"></progress>
+            <p id="upload-progress-detail">Waiting for backend progress.</p>
+          </div>
+
+          <div class="table-toolbar">
+            <h3>Files</h3>
+            <button id="refresh-files" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Size</th>
+                  <th>Chunks</th>
+                  <th>Protection</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="files-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" id="admin-panel" hidden>
+          <div class="section-head">
+            <h2>Admin Console</h2>
+            <p>Audit, recovery, tamper review, password reset, and destruction controls.</p>
+          </div>
+
+          <div class="admin-actions">
+            <button id="load-audit" type="button">Audit Logs</button>
+            <button id="load-recovery" type="button">Recovery Queue</button>
+            <button id="load-alerts" type="button">Tamper Alerts</button>
+            <button id="show-clear-lockdown" type="button">Clear Lockdown</button>
+            <button id="show-reset-password" type="button">Reset Password</button>
+            <button id="show-export-report" type="button">Export Report</button>
+            <button id="show-security-summary" type="button">Security &amp; Keys</button>
+            <button id="show-erase-vault" type="button">Crypto-Erase</button>
+          </div>
+
+          <div class="admin-workspace">
+            <section class="admin-section" id="admin-placeholder" data-admin-section="placeholder">
+              <p class="muted">Select an admin function to open its workspace.</p>
+            </section>
+
+            <section class="admin-section audit-section" id="audit-section" data-admin-section="audit" hidden>
+              <div class="section-head">
+                <h3>Audit Logs</h3>
+                <p>Select a log view. Tables are rendered below the audit controls.</p>
+              </div>
+              <div class="audit-mode-actions">
+                <button id="audit-login-logs" type="button">Login Logs</button>
+                <button id="audit-host-fingerprinting" type="button">Host Fingerprinting</button>
+                <button id="audit-operations-log" type="button">Operations Log</button>
+                <button id="audit-complete-raw" type="button">Download Complete Logs</button>
+              </div>
+              <div class="audit-result" id="audit-result">
+                <div class="table-toolbar">
+                  <h3 id="audit-table-title">Login Logs</h3>
+                  <button id="audit-export-current" type="button">Export Log</button>
+                </div>
+                <div class="table-wrap audit-wrap">
+                  <table>
+                    <thead id="audit-table-head"></thead>
+                    <tbody id="audit-table-body">
+                      <tr>
+                        <td class="muted">Choose an audit log mode to load records.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section class="admin-section" id="admin-output-section" data-admin-section="output" hidden>
+              <div class="table-toolbar">
+                <h3 id="admin-output-title">Admin Output</h3>
+              </div>
+              <pre id="admin-output" class="output"></pre>
+            </section>
+
+            <section class="admin-section" id="recovery-section" data-admin-section="recovery" hidden>
+              <div class="table-toolbar">
+                <h3>Recovery Queue</h3>
+              </div>
+              <div class="table-wrap recovery-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>File ID</th>
+                      <th>State</th>
+                      <th>Requested</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recovery-body">
+                    <tr>
+                      <td class="muted" colspan="4">Load the recovery queue to review pending files.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="admin-section" id="clear-lockdown-section" data-admin-section="clear-lockdown" hidden>
+              <div class="section-head">
+                <h3>Clear Lockdown</h3>
+                <p>Clear persistent lockdown after completing admin review.</p>
+              </div>
+              <button id="clear-lockdown" type="button">Confirm Clear Lockdown</button>
+            </section>
+
+            <section class="admin-section" id="reset-password-section" data-admin-section="reset-password" hidden>
+              <form id="reset-password-form" class="compact-form" autocomplete="off">
+                <label>
+                  New User Passphrase
+                  <input id="new-user-passphrase" type="password" minlength="12" required />
+                </label>
+                <button type="submit">Reset User Password</button>
+              </form>
+            </section>
+
+            <section class="admin-section" id="export-report-section" data-admin-section="export-report" hidden>
+              <form id="export-report-form" class="compact-form" autocomplete="off">
+                <label>
+                  Report Destination Folder
+                  <input id="report-destination" type="text" placeholder="Optional; defaults to Downloads" />
+                </label>
+                <button type="submit">Export Report</button>
+              </form>
+            </section>
+
+            <section class="admin-section" id="erase-vault-section" data-admin-section="erase-vault" hidden>
+              <form id="erase-vault-form" class="compact-form danger-form" autocomplete="off">
+                <label>
+                  Crypto-Erase Confirmation
+                  <input id="erase-confirmation" type="text" placeholder="CRYPTO ERASE VAULT" required />
+                </label>
+                <button type="submit">Crypto-Erase Vault</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="panel lockdown-panel" id="lockdown-panel" hidden>
+          <div class="section-head">
+            <h2>Lockdown Mode</h2>
+            <p id="lockdown-reason">This drive is locked due to a security event.</p>
+          </div>
+          <p>Admin login remains available for recovery, audit export, lockdown clearing, or crypto-erase.</p>
+        </section>
+      </section>
+
+      <footer class="footer-actions">
+        <button id="session-refresh" type="button">Refresh Session</button>
+        <button id="logout-button" type="button">Logout</button>
+      </footer>
+    </main>
+  </body>
+</html>

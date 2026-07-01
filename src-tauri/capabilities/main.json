@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-ipc-only",
+  "description": "Main window can use core Tauri IPC only. No shell, filesystem, HTTP, opener, clipboard, dialog, or external URL plugin permissions are granted.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
+

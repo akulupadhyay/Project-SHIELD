@@ -1,0 +1,19 @@
+# Rebuildable Rust/Tauri output
+/target/
+/src-tauri/target/
+/src-tauri/gen/
+
+# Local tool/bootstrap caches
+/.tools/
+
+# Live vault state generated at runtime
+/vault-data/
+/src-tauri/vault-data/
+/signed-device-manifest.json
+
+# Local logs and temp files
+*.log
+*.tmp
+
+# GitHub workflow publishing requires a credential with the workflow scope.
+/.github/workflows/
