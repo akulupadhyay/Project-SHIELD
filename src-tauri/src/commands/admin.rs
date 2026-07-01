@@ -1,4 +1,5 @@
-use crate::error::{CommandError, CommandResult, VaultError};
+use crate::commands::auth::validate_passphrase;
+use crate::error::{CommandError, CommandResult};
 use crate::models::{
     AuditExportResult, AuditTables, AuditView, CryptoEraseResult, CustodyExportResult,
     RecoveryView, SecuritySummary, SessionStatus, TamperAlert,
@@ -106,11 +107,7 @@ pub async fn admin_reset_user_password(
     state: State<'_, AppState>,
     new_user_passphrase: String,
 ) -> CommandResult<()> {
-    if new_user_passphrase.len() < 12 {
-        return Err(CommandError::from(VaultError::InvalidInput(
-            "new_user_passphrase must be at least 12 characters".to_string(),
-        )));
-    }
+    validate_passphrase("new_user_passphrase", &new_user_passphrase)?;
 
     let keys = state
         .require_admin_keys()

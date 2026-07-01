@@ -90,6 +90,8 @@ pub struct SessionStatus {
     pub lockdown_reason: Option<String>,
     pub manifest_status: ManifestRuntimeStatus,
     pub storage_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_recovery_key_one_time: Option<AdminRecoveryKeyPresentation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,8 +149,25 @@ pub struct AdminVaultDisk {
     pub tamper_alerts: Vec<TamperAlert>,
     #[serde(default)]
     pub auth_events: Vec<AuthEventRecord>,
+    #[serde(default)]
+    pub admin_recovery: Option<AdminRecoveryCredential>,
     pub created_at_unix: i64,
     pub updated_at_unix: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminRecoveryCredential {
+    pub key_id: String,
+    pub created_at_unix: i64,
+    pub kdf: KdfProfile,
+    pub admin_vault_key_wrapped_by_recovery_key: AeadEnvelope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminRecoveryKeyPresentation {
+    pub key_id: String,
+    pub created_at_unix: i64,
+    pub recovery_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

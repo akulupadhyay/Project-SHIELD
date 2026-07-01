@@ -6,6 +6,10 @@ const state = {
   busy: false,
   uploadOperationId: null,
   uploadProgressTimer: null,
+  selectedUploadPath: "",
+  activeUploadSource: "none",
+  justInitialized: false,
+  loginVisibleAfterInit: true,
   activeAdminSection: "placeholder",
   activeAuditCategory: "login_logs"
 };
@@ -20,6 +24,7 @@ const els = {
   storageSummary: document.getElementById("storage-summary"),
   actionsSummary: document.getElementById("actions-summary"),
   setupPanel: document.getElementById("setup-panel"),
+  postInitPanel: document.getElementById("post-init-panel"),
   loginPanel: document.getElementById("login-panel"),
   userPanel: document.getElementById("user-panel"),
   adminPanel: document.getElementById("admin-panel"),
@@ -40,7 +45,14 @@ const els = {
   uploadProgressStage: document.getElementById("upload-progress-stage"),
   uploadProgressPercent: document.getElementById("upload-progress-percent"),
   uploadProgressBar: document.getElementById("upload-progress-bar"),
-  uploadProgressDetail: document.getElementById("upload-progress-detail")
+  uploadProgressDetail: document.getElementById("upload-progress-detail"),
+  uploadDropZone: document.getElementById("upload-drop-zone"),
+  uploadFilePicker: document.getElementById("upload-file-picker"),
+  uploadSelectedLabel: document.getElementById("upload-selected-label"),
+  uploadSubmit: document.getElementById("upload-submit"),
+  adminResetForm: document.getElementById("admin-reset-form"),
+  adminRecoveryModal: document.getElementById("admin-recovery-modal"),
+  adminRecoveryKeyValue: document.getElementById("admin-recovery-key-value")
 };
 
 function invoke(command, args) {
@@ -62,6 +74,31 @@ async function listenForUploadProgress() {
 
   await tauri.event.listen("vault-upload-progress", (event) => {
     handleUploadProgress(event.payload || {});
+  });
+}
+
+async function listenForFileDrops() {
+  const tauri = window.__TAURI__;
+  if (!tauri || !tauri.event || typeof tauri.event.listen !== "function") {
+    return;
+  }
+
+  await tauri.event.listen("tauri://drag-enter", () => {
+    els.uploadDropZone.classList.add("drag-active");
+  });
+  await tauri.event.listen("tauri://drag-leave", () => {
+    els.uploadDropZone.classList.remove("drag-active");
+  });
+  await tauri.event.listen("tauri://drag-drop", (event) => {
+    els.uploadDropZone.classList.remove("drag-active");
+    const paths = event && event.payload && Array.isArray(event.payload.paths)
+      ? event.payload.paths
+      : [];
+    if (paths.length !== 1) {
+      showNotice("Drop exactly one file for each upload.", "error");
+      return;
+    }
+    setSelectedUploadPath(paths[0], "Dropped file");
   });
 }
 
@@ -106,6 +143,61 @@ function clearSecrets(...ids) {
   });
 }
 
+function sanitizedPathInput(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .trim();
+}
+
+function hasUnsafeControl(value) {
+  return /[\u0000-\u001F\u007F]/.test(String(value || ""));
+}
+
+function isRepetitiveSecret(value) {
+  const chars = Array.from(String(value || "").trim());
+  if (chars.length < 2) {
+    return true;
+  }
+  if (chars.every((char) => char === chars[0])) {
+    return true;
+  }
+  const maxPattern = Math.min(6, Math.floor(chars.length / 2));
+  for (let size = 1; size <= maxPattern; size += 1) {
+    if (chars.length % size !== 0) {
+      continue;
+    }
+    const pattern = chars.slice(0, size).join("");
+    let repeated = true;
+    for (let index = 0; index < chars.length; index += size) {
+      if (chars.slice(index, index + size).join("") !== pattern) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validatePassphraseClient(label, value) {
+  const text = String(value || "");
+  if (hasUnsafeControl(text)) {
+    return `${label} must not contain control characters.`;
+  }
+  if (Array.from(text).length > 4096) {
+    return `${label} is too long to process safely.`;
+  }
+  if (Array.from(text.trim()).length < 12) {
+    return `${label} must be at least 12 characters.`;
+  }
+  if (isRepetitiveSecret(text)) {
+    return `${label} must not be a repetitive pattern.`;
+  }
+  return null;
+}
+
 function setBusy(isBusy, message) {
   state.busy = isBusy;
   document.querySelectorAll("button, input, select").forEach((element) => {
@@ -115,6 +207,9 @@ function setBusy(isBusy, message) {
   });
   if (isBusy && message) {
     showNotice(message, "pending");
+  }
+  if (!isBusy) {
+    syncUploadControls();
   }
 }
 
@@ -163,8 +258,10 @@ function render(session) {
   els.storageSummary.textContent = session.storage_root || "unresolved";
   els.actionsSummary.textContent = (session.allowed_actions || []).join(", ") || "none";
 
+  const showPostInit = mode === "LOCKED" && state.justInitialized && !state.loginVisibleAfterInit;
   els.setupPanel.hidden = session.initialized === true;
-  els.loginPanel.hidden = mode === "USER" || mode === "ADMIN";
+  els.postInitPanel.hidden = !showPostInit;
+  els.loginPanel.hidden = mode !== "LOCKED" || showPostInit;
   els.userPanel.hidden = mode !== "USER";
   els.adminPanel.hidden = mode !== "ADMIN";
   els.lockdownPanel.hidden = mode !== "LOCKDOWN";
@@ -177,8 +274,13 @@ function render(session) {
     els.adminActionButtons.forEach((button) => button.classList.remove("active"));
   }
 
+  if (mode !== "USER" && !state.uploadOperationId) {
+    els.uploadProgressPanel.hidden = true;
+  }
+
   if (!state.busy) {
     document.getElementById("logout-button").disabled = !session.authenticated;
+    syncUploadControls();
   }
 }
 
@@ -258,6 +360,76 @@ function finishUploadProgress(message, success) {
     els.uploadProgressPanel.hidden = true;
     state.uploadOperationId = null;
   }, success ? 1600 : 4000);
+}
+
+function hideUploadProgress() {
+  window.clearTimeout(state.uploadProgressTimer);
+  els.uploadProgressPanel.hidden = true;
+  state.uploadOperationId = null;
+}
+
+function currentUploadPath() {
+  const pastedPath = sanitizedPathInput(document.getElementById("upload-source-path").value);
+  if (state.activeUploadSource === "selected" && state.selectedUploadPath) {
+    return state.selectedUploadPath;
+  }
+  return pastedPath;
+}
+
+function syncUploadControls() {
+  if (!els.uploadSubmit) {
+    return;
+  }
+  const mode = document.getElementById("upload-mode").value;
+  const sourcePath = currentUploadPath();
+  els.uploadSubmit.disabled = state.busy || !mode || !sourcePath;
+}
+
+function resetUploadSource() {
+  state.selectedUploadPath = "";
+  state.activeUploadSource = "none";
+  document.getElementById("upload-source-path").value = "";
+  els.uploadSelectedLabel.textContent = "Drag and drop a file here or choose from your OS explorer.";
+  syncUploadControls();
+}
+
+function setSelectedUploadPath(path, sourceLabel) {
+  const cleanPath = sanitizedPathInput(path);
+  if (!cleanPath) {
+    showNotice("Selected upload path was empty or unsafe.", "error");
+    state.selectedUploadPath = "";
+    state.activeUploadSource = "none";
+    syncUploadControls();
+    return;
+  }
+  state.selectedUploadPath = cleanPath;
+  state.activeUploadSource = "selected";
+  document.getElementById("upload-source-path").value = "";
+  const fileName = cleanPath.split(/[\\/]/).filter(Boolean).pop() || cleanPath;
+  els.uploadSelectedLabel.textContent = `${sourceLabel}: ${fileName}`;
+  showNotice(`${sourceLabel} ready. Select encryption mode and upload.`, "success");
+  syncUploadControls();
+}
+
+function handleFilePickerSelection() {
+  const file = els.uploadFilePicker.files && els.uploadFilePicker.files[0];
+  if (!file) {
+    return;
+  }
+  const possiblePath = file.path || file.webkitRelativePath || "";
+  if (possiblePath) {
+    setSelectedUploadPath(possiblePath, "Selected file");
+  } else {
+    state.selectedUploadPath = "";
+    state.activeUploadSource = "none";
+    els.uploadSelectedLabel.textContent = `Selected file: ${file.name}`;
+    showNotice(
+      "The OS chooser did not expose a backend-readable path. Drag the file into the vault window or paste the path in the OR field.",
+      "pending"
+    );
+    syncUploadControls();
+  }
+  els.uploadFilePicker.value = "";
 }
 
 function formatProtection(file) {
@@ -637,24 +809,49 @@ function formatSecuritySummary(summary) {
     .join("\n\n");
 }
 
+function showAdminRecoveryKey(presentation) {
+  els.adminRecoveryKeyValue.textContent = presentation.recovery_key;
+  els.adminRecoveryModal.hidden = false;
+}
+
 document.getElementById("initialize-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   hideNotice();
   const userPassphrase = document.getElementById("init-user-passphrase").value;
   const adminPassphrase = document.getElementById("init-admin-passphrase").value;
+  const userValidation = validatePassphraseClient("User passphrase", userPassphrase);
+  const adminValidation = validatePassphraseClient("Admin passphrase", adminPassphrase);
+  if (userValidation || adminValidation) {
+    showNotice(userValidation || adminValidation, "error");
+    return;
+  }
+  if (userPassphrase === adminPassphrase) {
+    showNotice("User and Admin passphrases must be different.", "error");
+    return;
+  }
   try {
     const session = await withBusy("Creating encrypted vault...", () =>
       invoke("initialize_vault", { userPassphrase, adminPassphrase })
     );
     clearSecrets("init-user-passphrase", "init-admin-passphrase");
     state.session = session;
+    state.justInitialized = true;
+    state.loginVisibleAfterInit = false;
     render(session);
-    showNotice("Vault initialized. Log in with User or Admin credentials.", "success");
+    showNotice("Vault initialized. Continue to the login form.", "success");
   } catch (error) {
     showNotice(formatError(error), "error");
   } finally {
     clearSecrets("init-user-passphrase", "init-admin-passphrase");
   }
+});
+
+document.getElementById("show-login-after-init").addEventListener("click", () => {
+  state.loginVisibleAfterInit = true;
+  if (state.session) {
+    render(state.session);
+  }
+  showNotice("Login form is ready.", "success");
 });
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
@@ -669,8 +866,13 @@ document.getElementById("login-form").addEventListener("submit", async (event) =
     clearSecrets("login-passphrase");
     state.session = session;
     state.auditTables = null;
+    state.justInitialized = false;
+    state.loginVisibleAfterInit = true;
     render(session);
     showNotice(`Logged in as ${role}.`, "success");
+    if (session.admin_recovery_key_one_time) {
+      showAdminRecoveryKey(session.admin_recovery_key_one_time);
+    }
     if (session.mode === "USER") {
       await loadFiles(true);
     }
@@ -682,11 +884,101 @@ document.getElementById("login-form").addEventListener("submit", async (event) =
   }
 });
 
+document.getElementById("show-admin-reset").addEventListener("click", () => {
+  els.adminResetForm.hidden = false;
+  showNotice("Enter the admin recovery key and new admin passphrase.", "pending");
+});
+
+document.getElementById("cancel-admin-reset").addEventListener("click", () => {
+  els.adminResetForm.hidden = true;
+  clearSecrets(
+    "admin-reset-recovery-key",
+    "admin-reset-new-passphrase",
+    "admin-reset-confirm-passphrase"
+  );
+});
+
+document.getElementById("admin-reset-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  hideNotice();
+  const recoveryKey = document.getElementById("admin-reset-recovery-key").value.trim();
+  const newAdminPassphrase = document.getElementById("admin-reset-new-passphrase").value;
+  const confirmPassphrase = document.getElementById("admin-reset-confirm-passphrase").value;
+  const validation = validatePassphraseClient("New admin passphrase", newAdminPassphrase);
+  if (validation) {
+    showNotice(validation, "error");
+    return;
+  }
+  if (newAdminPassphrase !== confirmPassphrase) {
+    showNotice("New admin passphrase confirmation does not match.", "error");
+    return;
+  }
+  try {
+    const session = await withBusy("Verifying recovery key and resetting admin passphrase...", () =>
+      invoke("reset_admin_password_with_recovery_key", { recoveryKey, newAdminPassphrase })
+    );
+    state.session = session;
+    els.adminResetForm.hidden = true;
+    clearSecrets(
+      "admin-reset-recovery-key",
+      "admin-reset-new-passphrase",
+      "admin-reset-confirm-passphrase"
+    );
+    render(session);
+    showNotice("Admin passphrase reset. Log in with the new admin passphrase.", "success");
+  } catch (error) {
+    showNotice(formatError(error), "error");
+  } finally {
+    clearSecrets(
+      "admin-reset-recovery-key",
+      "admin-reset-new-passphrase",
+      "admin-reset-confirm-passphrase"
+    );
+  }
+});
+
+document.getElementById("lockdown-recovery-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  hideNotice();
+  const recoveryKey = document.getElementById("lockdown-recovery-key").value.trim();
+  try {
+    const session = await withBusy("Verifying recovery key and clearing lockdown...", () =>
+      invoke("clear_lockdown_with_recovery_key", { recoveryKey })
+    );
+    clearSecrets("lockdown-recovery-key");
+    state.session = session;
+    state.justInitialized = false;
+    state.loginVisibleAfterInit = true;
+    render(session);
+    showNotice("Lockdown cleared. Log in with the admin passphrase.", "success");
+  } catch (error) {
+    showNotice(formatError(error), "error");
+  } finally {
+    clearSecrets("lockdown-recovery-key");
+  }
+});
+
+document.getElementById("ack-admin-recovery-key").addEventListener("click", () => {
+  els.adminRecoveryKeyValue.textContent = "";
+  els.adminRecoveryModal.hidden = true;
+});
+
 document.getElementById("upload-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   hideNotice();
-  const sourcePath = document.getElementById("upload-source-path").value;
+  const sourcePath = currentUploadPath();
   const mode = document.getElementById("upload-mode").value;
+  if (!sourcePath) {
+    showNotice("Select a file, drop one into the upload box, or paste a file path.", "error");
+    syncUploadControls();
+    return;
+  }
+  if (!mode) {
+    hideUploadProgress();
+    showNotice("Select an encryption mode before uploading.", "error");
+    syncUploadControls();
+    return;
+  }
   const operationId = createOperationId();
   state.uploadOperationId = operationId;
   window.clearTimeout(state.uploadProgressTimer);
@@ -702,7 +994,7 @@ document.getElementById("upload-form").addEventListener("submit", async (event) 
     const result = await withBusy("Packaging and encrypting file...", () =>
       invoke("upload_file", { sourcePath, mode, operationId })
     );
-    document.getElementById("upload-source-path").value = "";
+    resetUploadSource();
     finishUploadProgress("Upload encrypted and committed", true);
     showNotice(`Uploaded ${result.original_name}.`, "success");
     await loadFiles(true);
@@ -710,6 +1002,64 @@ document.getElementById("upload-form").addEventListener("submit", async (event) 
     finishUploadProgress("Upload failed", false);
     showNotice(formatError(error), "error");
   }
+});
+
+document.getElementById("choose-upload-file").addEventListener("click", () => {
+  hideNotice();
+  els.uploadFilePicker.click();
+});
+
+els.uploadFilePicker.addEventListener("change", handleFilePickerSelection);
+
+els.uploadDropZone.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  els.uploadDropZone.classList.add("drag-active");
+});
+
+els.uploadDropZone.addEventListener("dragleave", () => {
+  els.uploadDropZone.classList.remove("drag-active");
+});
+
+els.uploadDropZone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  els.uploadDropZone.classList.remove("drag-active");
+  const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+  if (!file) {
+    return;
+  }
+  const possiblePath = file.path || file.webkitRelativePath || "";
+  if (possiblePath) {
+    setSelectedUploadPath(possiblePath, "Dropped file");
+  } else {
+    showNotice(
+      "The dropped file did not expose a backend-readable path. Use Tauri window drag/drop or paste the file path.",
+      "pending"
+    );
+  }
+});
+
+document.getElementById("upload-source-path").addEventListener("input", (event) => {
+  const cleanPath = sanitizedPathInput(event.target.value);
+  if (event.target.value !== cleanPath) {
+    event.target.value = cleanPath;
+  }
+  if (cleanPath) {
+    state.activeUploadSource = "path";
+    state.selectedUploadPath = "";
+    const fileName = cleanPath.split(/[\\/]/).filter(Boolean).pop() || cleanPath;
+    els.uploadSelectedLabel.textContent = `Using pasted path: ${fileName}`;
+  } else {
+    resetUploadSource();
+    return;
+  }
+  syncUploadControls();
+});
+
+document.getElementById("upload-mode").addEventListener("change", () => {
+  if (!document.getElementById("upload-mode").value) {
+    hideUploadProgress();
+  }
+  syncUploadControls();
 });
 
 document.getElementById("refresh-files").addEventListener("click", () => loadFiles(false));
@@ -725,6 +1075,8 @@ document.getElementById("logout-button").addEventListener("click", async () => {
     state.files = [];
     state.auditTables = null;
     state.recoveryQueue = [];
+    state.justInitialized = false;
+    state.loginVisibleAfterInit = true;
     renderFiles([]);
     render(session);
     showNotice("Logged out. Active keys were dropped by the backend.", "success");
@@ -886,5 +1238,8 @@ document.getElementById("erase-vault-form").addEventListener("submit", async (ev
 
 listenForUploadProgress().catch((error) => {
   console.warn("Upload progress events unavailable", error);
+});
+listenForFileDrops().catch((error) => {
+  console.warn("File drop events unavailable", error);
 });
 refreshSession({ silent: true });

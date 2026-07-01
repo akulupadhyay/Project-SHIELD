@@ -15,7 +15,10 @@ use crate::commands::admin::{
     admin_destroy_file, admin_export_audit_logs, admin_export_custody_report, admin_recover_file,
     admin_recovery_queue, admin_reset_user_password, admin_security_summary, admin_tamper_alerts,
 };
-use crate::commands::auth::{initialize_vault, login, logout, session_check};
+use crate::commands::auth::{
+    clear_lockdown_with_recovery_key, initialize_vault, login, logout,
+    reset_admin_password_with_recovery_key, session_check,
+};
 use crate::commands::user::{delete_request, download_file, list_files, upload_file};
 use crate::manifest::verify_or_create_manifest;
 use crate::models::ManifestRuntimeStatus;
@@ -61,6 +64,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             initialize_vault,
             login,
+            reset_admin_password_with_recovery_key,
+            clear_lockdown_with_recovery_key,
             logout,
             session_check,
             list_files,

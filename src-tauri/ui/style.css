@@ -43,8 +43,23 @@ button {
   cursor: pointer;
 }
 
+button.link-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  text-align: left;
+  text-decoration: underline;
+}
+
 button:hover {
   background: #31405a;
+}
+
+button.link-button:hover {
+  background: transparent;
+  color: #c3d6ff;
 }
 
 button:disabled {
@@ -208,6 +223,10 @@ body.mode-lockdown .status-pill {
   background: #0f1d17;
 }
 
+.upload-progress[hidden] {
+  display: none;
+}
+
 .progress-meta {
   display: flex;
   justify-content: space-between;
@@ -304,14 +323,87 @@ form {
   gap: 12px;
 }
 
+.secondary-form[hidden] {
+  display: none;
+}
+
 .compact-form {
   grid-template-columns: minmax(260px, 1fr) auto;
   align-items: end;
   margin-bottom: 16px;
 }
 
-#upload-form {
-  grid-template-columns: minmax(320px, 1fr) minmax(160px, 220px) minmax(130px, auto);
+.login-secondary {
+  margin-top: 14px;
+}
+
+.secondary-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.upload-box {
+  margin-bottom: 16px;
+}
+
+.upload-methods {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto minmax(240px, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.upload-drop-zone,
+.path-option {
+  min-height: 156px;
+  border: 1px dashed #4b5b72;
+  border-radius: 8px;
+  background: #0f151d;
+  padding: 16px;
+}
+
+.upload-drop-zone {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 10px;
+}
+
+.upload-drop-zone.drag-active {
+  border-color: var(--green);
+  background: #0f1d17;
+}
+
+.upload-drop-zone p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.upload-or {
+  align-self: center;
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.path-option {
+  align-content: center;
+}
+
+.field-help {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.upload-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(120px, auto);
+  gap: 12px;
+  align-items: end;
 }
 
 .danger-form button {
@@ -469,6 +561,43 @@ form {
   background: #1b1113;
 }
 
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 7, 11, 0.78);
+  z-index: 20;
+}
+
+.modal-panel {
+  width: min(680px, calc(100vw - 40px));
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 22px;
+  background: var(--panel);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+}
+
+.modal-panel code {
+  display: block;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0a0e13;
+  color: #c6f6d5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .footer-actions {
   justify-content: flex-end;
   gap: 10px;
@@ -486,9 +615,14 @@ form {
 
   .grid,
   .compact-form,
-  #upload-form,
+  .upload-methods,
+  .upload-controls,
   .status-panel {
     grid-template-columns: 1fr;
+  }
+
+  .upload-or {
+    text-align: center;
   }
 
   .topbar {

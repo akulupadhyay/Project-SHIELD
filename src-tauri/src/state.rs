@@ -229,6 +229,7 @@ impl RuntimeState {
             lockdown_reason: self.lockdown_reason.clone(),
             manifest_status: self.manifest_status.clone(),
             storage_root: self.storage_root.clone(),
+            admin_recovery_key_one_time: None,
         }
     }
 }
@@ -278,9 +279,9 @@ fn allowed_actions(mode: UiMode) -> Vec<String> {
             "crypto_erase_vault",
             "logout",
         ],
-        UiMode::Lockdown => &["admin_recovery"],
+        UiMode::Lockdown => &["clear_lockdown_with_recovery_key"],
         UiMode::Uninitialized => &["initialize_vault"],
-        UiMode::Locked => &["login"],
+        UiMode::Locked => &["login", "reset_admin_password_with_recovery_key"],
     };
     actions.iter().map(|action| (*action).to_string()).collect()
 }
@@ -312,6 +313,7 @@ mod tests {
 
         let admin = state
             .start_admin_session(UnlockedAdminKeys {
+                admin_vault_key: random_key(),
                 audit_key: random_key(),
                 recovery_key: random_key(),
                 user_vault_key: random_key(),

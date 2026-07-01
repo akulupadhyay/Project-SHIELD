@@ -47,14 +47,22 @@
           <form id="initialize-form" autocomplete="off">
             <label>
               User Passphrase
-              <input id="init-user-passphrase" type="password" minlength="12" required />
+              <input id="init-user-passphrase" type="password" minlength="12" maxlength="4096" required />
             </label>
             <label>
               Admin Passphrase
-              <input id="init-admin-passphrase" type="password" minlength="12" required />
+              <input id="init-admin-passphrase" type="password" minlength="12" maxlength="4096" required />
             </label>
             <button type="submit">Initialize</button>
           </form>
+        </section>
+
+        <section class="panel" id="post-init-panel" hidden>
+          <div class="section-head">
+            <h2>Vault Initialized</h2>
+            <p>The passphrases passed backend validation. Continue to the login form.</p>
+          </div>
+          <button id="show-login-after-init" type="button">Continue to Login</button>
         </section>
 
         <section class="panel" id="login-panel" hidden>
@@ -72,9 +80,30 @@
             </label>
             <label>
               Passphrase
-              <input id="login-passphrase" type="password" required />
+              <input id="login-passphrase" type="password" maxlength="4096" required />
             </label>
             <button type="submit">Login</button>
+          </form>
+          <div class="login-secondary">
+            <button id="show-admin-reset" type="button" class="link-button">Reset admin passphrase</button>
+          </div>
+          <form id="admin-reset-form" class="secondary-form" autocomplete="off" hidden>
+            <label>
+              Admin Recovery Key
+              <input id="admin-reset-recovery-key" type="password" maxlength="180" required />
+            </label>
+            <label>
+              New Admin Passphrase
+              <input id="admin-reset-new-passphrase" type="password" minlength="12" maxlength="4096" required />
+            </label>
+            <label>
+              Confirm New Admin Passphrase
+              <input id="admin-reset-confirm-passphrase" type="password" minlength="12" maxlength="4096" required />
+            </label>
+            <div class="row-actions">
+              <button type="submit">Reset Admin Passphrase</button>
+              <button id="cancel-admin-reset" type="button">Cancel</button>
+            </div>
           </form>
         </section>
 
@@ -84,19 +113,32 @@
             <p>Upload, list, download, and request deletion for encrypted files.</p>
           </div>
 
-          <form id="upload-form" class="compact-form" autocomplete="off">
-            <label>
-              Source File Path
-              <input id="upload-source-path" type="text" placeholder="Paste an absolute file path" required />
-            </label>
-            <label>
-              Mode
-              <select id="upload-mode">
-                <option value="FAST">Fast</option>
-                <option value="SUPER_SECURE">Super Secure</option>
-              </select>
-            </label>
-            <button type="submit">Upload</button>
+          <form id="upload-form" class="upload-box" autocomplete="off">
+            <div class="upload-methods">
+              <div class="upload-drop-zone" id="upload-drop-zone" tabindex="0">
+                <input id="upload-file-picker" type="file" hidden />
+                <h3>Upload File</h3>
+                <p id="upload-selected-label">Drag and drop a file here or choose from your OS explorer.</p>
+                <button id="choose-upload-file" type="button">Choose File</button>
+              </div>
+              <div class="upload-or">OR</div>
+              <label class="path-option">
+                Paste Upload File Path
+                <input id="upload-source-path" type="text" maxlength="32768" placeholder="Paste an absolute file path" />
+                <span class="field-help">Use this only if drag/drop or file chooser cannot provide a path.</span>
+              </label>
+            </div>
+            <div class="upload-controls">
+              <label>
+                Encryption Mode
+                <select id="upload-mode" required>
+                  <option value="" selected disabled>Select encryption mode</option>
+                  <option value="FAST">Fast</option>
+                  <option value="SUPER_SECURE">Super Secure</option>
+                </select>
+              </label>
+              <button id="upload-submit" type="submit">Upload</button>
+            </div>
           </form>
 
           <div class="upload-progress" id="upload-progress-panel" hidden>
@@ -221,7 +263,7 @@
               <form id="reset-password-form" class="compact-form" autocomplete="off">
                 <label>
                   New User Passphrase
-                  <input id="new-user-passphrase" type="password" minlength="12" required />
+                  <input id="new-user-passphrase" type="password" minlength="12" maxlength="4096" required />
                 </label>
                 <button type="submit">Reset User Password</button>
               </form>
@@ -254,7 +296,13 @@
             <h2>Lockdown Mode</h2>
             <p id="lockdown-reason">This drive is locked due to a security event.</p>
           </div>
-          <p>Admin login remains available for recovery, audit export, lockdown clearing, or crypto-erase.</p>
+          <form id="lockdown-recovery-form" autocomplete="off">
+            <label>
+              Admin Recovery Key
+              <input id="lockdown-recovery-key" type="password" maxlength="180" required />
+            </label>
+            <button type="submit">Clear Lockdown</button>
+          </form>
         </section>
       </section>
 
@@ -262,6 +310,15 @@
         <button id="session-refresh" type="button">Refresh Session</button>
         <button id="logout-button" type="button">Logout</button>
       </footer>
+
+      <section class="modal-backdrop" id="admin-recovery-modal" hidden>
+        <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="admin-recovery-title">
+          <h2 id="admin-recovery-title">Admin Recovery Key</h2>
+          <p>This key is shown once. It clears lockdown and resets the admin passphrase.</p>
+          <code id="admin-recovery-key-value"></code>
+          <button id="ack-admin-recovery-key" type="button">I Saved This Key</button>
+        </div>
+      </section>
     </main>
   </body>
 </html>

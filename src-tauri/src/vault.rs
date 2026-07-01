@@ -11,19 +11,20 @@ use crate::crypto::{
 use crate::error::{VaultError, VaultResult};
 use crate::manifest::manifest_path_for_root;
 use crate::models::{
-    AdminVaultDisk, AeadEnvelope, AuditExportResult, AuditTables, AuditView, AuthEventRecord,
-    ChunkRecord, CredentialEnvelope, CryptoEraseResult, CustodyExportResult, CustodyReport,
-    DeleteRequestResult, DownloadResult, FileKeyProtection, FileListEntry, FileMetadata, FileState,
-    HostFingerprint, HostFingerprintLogRow, LockdownRecord, LoginLogRow, OperationLogRow,
-    PayloadFormat, PqcFileKeyEnvelope, RecoveryRecord, RecoveryView, Role, TamperAlert,
-    UploadProgress, UploadSecurityMode, UserFileRecord, UserVaultDisk,
+    AdminRecoveryKeyPresentation, AdminVaultDisk, AeadEnvelope, AuditExportResult, AuditTables,
+    AuditView, AuthEventRecord, ChunkRecord, CredentialEnvelope, CryptoEraseResult,
+    CustodyExportResult, CustodyReport, DeleteRequestResult, DownloadResult, FileKeyProtection,
+    FileListEntry, FileMetadata, FileState, HostFingerprint, HostFingerprintLogRow, LockdownRecord,
+    LoginLogRow, OperationLogRow, PayloadFormat, PqcFileKeyEnvelope, RecoveryRecord, RecoveryView,
+    Role, TamperAlert, UploadProgress, UploadSecurityMode, UserFileRecord, UserVaultDisk,
 };
 use ml_kem::{
     kem::{Decapsulate, Encapsulate, Kem, KeyExport},
     ml_kem_1024::{Ciphertext as MlKem1024Ciphertext, DecapsulationKey as MlKem1024PrivateKey},
     MlKem1024, Seed,
 };
-use secrecy::SecretString;
+use rand_core::{OsRng, RngCore};
+use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::json;
@@ -42,6 +43,8 @@ const AUDIT_KEY_BY_ADMIN_VAULT: &str = "secure-vault:v1:audit-key:by-admin-vault
 const RECOVERY_KEY_BY_USER_VAULT: &str = "secure-vault:v1:recovery-key:by-user-vault";
 const RECOVERY_KEY_BY_ADMIN_VAULT: &str = "secure-vault:v1:recovery-key:by-admin-vault";
 const USER_VAULT_KEY_BY_RECOVERY_KEY: &str = "secure-vault:v1:user-vault-key:by-recovery-key";
+const ADMIN_VAULT_KEY_BY_ADMIN_RECOVERY_KEY: &str =
+    "secure-vault:v1:admin-vault-key:by-admin-recovery-key";
 const FILE_KEY_BY_USER_VAULT: &str = "secure-vault:v1:file-key:by-user-vault";
 const FILE_KEY_BY_RECOVERY_KEY: &str = "secure-vault:v1:file-key:by-recovery-key";
 const PQC_FILE_KEY_ALGORITHM: &str = "ML-KEM-1024+AES-256-GCM";
@@ -57,6 +60,7 @@ pub struct UnlockedUserKeys {
 
 #[derive(Clone)]
 pub struct UnlockedAdminKeys {
+    pub admin_vault_key: KeyMaterial,
     pub audit_key: KeyMaterial,
     pub recovery_key: KeyMaterial,
     pub user_vault_key: KeyMaterial,
@@ -192,6 +196,7 @@ impl VaultStore {
             recovery_queue: Vec::new(),
             tamper_alerts: Vec::new(),
             auth_events: Vec::new(),
+            admin_recovery: None,
             created_at_unix,
             updated_at_unix: created_at_unix,
         };
@@ -267,10 +272,128 @@ impl VaultStore {
         )?;
 
         Ok(UnlockedAdminKeys {
+            admin_vault_key,
             audit_key,
             recovery_key,
             user_vault_key,
         })
+    }
+
+    pub async fn ensure_admin_recovery_key(
+        &self,
+        keys: &UnlockedAdminKeys,
+        admin_passphrase: &SecretString,
+    ) -> VaultResult<Option<AdminRecoveryKeyPresentation>> {
+        let mut admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        if admin_vault.admin_recovery.is_some() {
+            return Ok(None);
+        }
+
+        let created_at_unix = now_unix();
+        let key_id = Uuid::new_v4().to_string();
+        let recovery_key = generate_admin_recovery_key(admin_passphrase, created_at_unix);
+        let recovery_secret = SecretString::new(recovery_key.clone());
+        let recovery_kdf = default_kdf_profile();
+        let recovery_kek = derive_key(&recovery_secret, &recovery_kdf)?;
+
+        admin_vault.admin_recovery = Some(crate::models::AdminRecoveryCredential {
+            key_id: key_id.clone(),
+            created_at_unix,
+            kdf: recovery_kdf,
+            admin_vault_key_wrapped_by_recovery_key: wrap_key(
+                &recovery_kek,
+                &keys.admin_vault_key,
+                ADMIN_VAULT_KEY_BY_ADMIN_RECOVERY_KEY,
+            )?,
+        });
+        append_audit_record(
+            &mut admin_vault,
+            &keys.audit_key,
+            Role::Admin.audit_actor(),
+            "admin_recovery_key_provisioned",
+            "SUCCESS",
+            json!({ "key_id": key_id }),
+        )?;
+        admin_vault.updated_at_unix = now_unix();
+        write_json_atomic(&self.paths.admin_vault, &admin_vault).await?;
+
+        Ok(Some(AdminRecoveryKeyPresentation {
+            key_id,
+            created_at_unix,
+            recovery_key,
+        }))
+    }
+
+    pub async fn reset_admin_password_with_recovery_key(
+        &self,
+        recovery_key: SecretString,
+        new_admin_passphrase: SecretString,
+    ) -> VaultResult<()> {
+        let mut admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        let recovery = admin_vault.admin_recovery.as_ref().ok_or_else(|| {
+            VaultError::InvalidInput(
+                "admin recovery key has not been provisioned; log in as admin once first"
+                    .to_string(),
+            )
+        })?;
+        let recovery_key_id = recovery.key_id.clone();
+        let recovery_kek = derive_key(&recovery_key, &recovery.kdf)?;
+        let admin_vault_key = unwrap_key(
+            &recovery_kek,
+            &recovery.admin_vault_key_wrapped_by_recovery_key,
+            ADMIN_VAULT_KEY_BY_ADMIN_RECOVERY_KEY,
+        )?;
+        let audit_key = unwrap_key(
+            &admin_vault_key,
+            &admin_vault.audit_key_wrapped_by_admin_vault,
+            AUDIT_KEY_BY_ADMIN_VAULT,
+        )?;
+        let new_kdf = default_kdf_profile();
+        let new_kek = derive_key(&new_admin_passphrase, &new_kdf)?;
+
+        admin_vault.admin_credential = CredentialEnvelope {
+            kdf: new_kdf,
+            wrapped_vault_key: wrap_key(&new_kek, &admin_vault_key, ADMIN_VAULT_KEY_BY_ADMIN_KEK)?,
+        };
+        admin_vault.failed_admin_attempts = 0;
+        append_audit_record(
+            &mut admin_vault,
+            &audit_key,
+            "RECOVERY",
+            "admin_password_reset_by_recovery_key",
+            "SUCCESS",
+            json!({ "key_id": recovery_key_id }),
+        )?;
+        admin_vault.updated_at_unix = now_unix();
+        write_json_atomic(&self.paths.admin_vault, &admin_vault).await
+    }
+
+    pub async fn clear_lockdown_with_recovery_key(
+        &self,
+        recovery_key: SecretString,
+    ) -> VaultResult<()> {
+        let keys = self.unlock_admin_with_recovery_key(recovery_key).await?;
+        self.clear_lockdown(&keys).await
+    }
+
+    async fn unlock_admin_with_recovery_key(
+        &self,
+        recovery_key: SecretString,
+    ) -> VaultResult<UnlockedAdminKeys> {
+        let admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        let recovery = admin_vault.admin_recovery.as_ref().ok_or_else(|| {
+            VaultError::InvalidInput(
+                "admin recovery key has not been provisioned; log in as admin once first"
+                    .to_string(),
+            )
+        })?;
+        let recovery_kek = derive_key(&recovery_key, &recovery.kdf)?;
+        let admin_vault_key = unwrap_key(
+            &recovery_kek,
+            &recovery.admin_vault_key_wrapped_by_recovery_key,
+            ADMIN_VAULT_KEY_BY_ADMIN_RECOVERY_KEY,
+        )?;
+        unlocked_admin_keys_from_admin_vault(&admin_vault, admin_vault_key)
     }
 
     pub async fn record_auth_event(
@@ -1246,9 +1369,19 @@ pub fn path_from_external_input(input: &str) -> VaultResult<PathBuf> {
             "path must not be empty".to_string(),
         ));
     }
+    if path_text.len() > 32_768 {
+        return Err(VaultError::InvalidInput(
+            "path is too long to process safely".to_string(),
+        ));
+    }
     if path_text.chars().any(|ch| ch == '\0') {
         return Err(VaultError::InvalidInput(
             "path must not contain NUL bytes".to_string(),
+        ));
+    }
+    if path_text.chars().any(char::is_control) {
+        return Err(VaultError::InvalidInput(
+            "path must not contain control characters".to_string(),
         ));
     }
     let path = expand_home_path(path_text).unwrap_or_else(|| PathBuf::from(path_text));
@@ -1728,6 +1861,50 @@ fn sanitize_file_name(name: &str) -> String {
         .trim()
         .trim_matches('.')
         .to_string()
+}
+
+fn generate_admin_recovery_key(admin_passphrase: &SecretString, created_at_unix: i64) -> String {
+    let mut entropy = [0u8; 32];
+    OsRng.fill_bytes(&mut entropy);
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"secure-vault:v1:admin-recovery-key");
+    hasher.update(&created_at_unix.to_be_bytes());
+    hasher.update(admin_passphrase.expose_secret().as_bytes());
+    hasher.update(&entropy);
+    let digest = hasher.finalize();
+    entropy.zeroize();
+    format!(
+        "SHIELD-{created_at_unix}-{}",
+        digest.to_hex().to_uppercase()
+    )
+}
+
+fn unlocked_admin_keys_from_admin_vault(
+    admin_vault: &AdminVaultDisk,
+    admin_vault_key: KeyMaterial,
+) -> VaultResult<UnlockedAdminKeys> {
+    let audit_key = unwrap_key(
+        &admin_vault_key,
+        &admin_vault.audit_key_wrapped_by_admin_vault,
+        AUDIT_KEY_BY_ADMIN_VAULT,
+    )?;
+    let recovery_key = unwrap_key(
+        &admin_vault_key,
+        &admin_vault.recovery_key_wrapped_by_admin_vault,
+        RECOVERY_KEY_BY_ADMIN_VAULT,
+    )?;
+    let user_vault_key = unwrap_key(
+        &recovery_key,
+        &admin_vault.user_vault_key_wrapped_by_recovery_key,
+        USER_VAULT_KEY_BY_RECOVERY_KEY,
+    )?;
+
+    Ok(UnlockedAdminKeys {
+        admin_vault_key,
+        audit_key,
+        recovery_key,
+        user_vault_key,
+    })
 }
 
 fn push_auth_event(admin_vault: &mut AdminVaultDisk, role: Role, status: &str, reason_code: &str) {
@@ -2415,6 +2592,89 @@ mod tests {
                 .any(|row| row.operation_done.starts_with("Lockdown triggered:")),
             "lockdown threshold should appear in Operations Log"
         );
+    }
+
+    #[tokio::test]
+    async fn admin_recovery_key_resets_password_and_clears_lockdown() {
+        let temp = TempVault::new("admin-recovery");
+        temp.initialize().await;
+
+        let admin_passphrase = SecretString::new(ADMIN_PASS.to_string());
+        let admin_keys = temp
+            .store
+            .authenticate_admin(admin_passphrase.clone())
+            .await
+            .expect("admin auth");
+        let recovery = temp
+            .store
+            .ensure_admin_recovery_key(&admin_keys, &admin_passphrase)
+            .await
+            .expect("provision recovery key")
+            .expect("first admin login should display recovery key");
+        assert!(recovery.recovery_key.starts_with("SHIELD-"));
+
+        let second = temp
+            .store
+            .ensure_admin_recovery_key(&admin_keys, &admin_passphrase)
+            .await
+            .expect("second recovery provisioning check");
+        assert!(
+            second.is_none(),
+            "admin recovery key should only be displayed once"
+        );
+
+        let new_admin_passphrase = "NewAdminPassphrase@456";
+        temp.store
+            .reset_admin_password_with_recovery_key(
+                SecretString::new(recovery.recovery_key.clone()),
+                SecretString::new(new_admin_passphrase.to_string()),
+            )
+            .await
+            .expect("reset admin password with recovery key");
+
+        assert!(
+            temp.store
+                .authenticate_admin(SecretString::new(ADMIN_PASS.to_string()))
+                .await
+                .is_err(),
+            "old admin passphrase should no longer authenticate"
+        );
+        temp.store
+            .authenticate_admin(SecretString::new(new_admin_passphrase.to_string()))
+            .await
+            .expect("new admin passphrase should authenticate");
+
+        for _ in 0..ADMIN_FAILED_LOGIN_LOCKDOWN_THRESHOLD {
+            temp.store
+                .record_failed_admin_login()
+                .await
+                .expect("record failed admin login");
+        }
+        assert!(
+            temp.store
+                .persistent_lockdown_reason()
+                .await
+                .expect("read lockdown")
+                .is_some(),
+            "failed admin threshold should persist lockdown"
+        );
+
+        temp.store
+            .clear_lockdown_with_recovery_key(SecretString::new(recovery.recovery_key))
+            .await
+            .expect("clear lockdown with recovery key");
+        assert!(
+            temp.store
+                .persistent_lockdown_reason()
+                .await
+                .expect("read cleared lockdown")
+                .is_none(),
+            "recovery-key clear should remove persistent lockdown"
+        );
+        temp.store
+            .authenticate_admin(SecretString::new(new_admin_passphrase.to_string()))
+            .await
+            .expect("admin should authenticate after recovery lockdown clear");
     }
 
     #[tokio::test]
