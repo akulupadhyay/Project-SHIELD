@@ -24,9 +24,13 @@ use crate::manifest::verify_or_create_manifest;
 use crate::models::ManifestRuntimeStatus;
 use crate::state::AppState;
 use crate::vault::VaultStore;
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 fn main() {
+    configure_portable_webview2_runtime();
+
     let store = VaultStore::portable().expect("failed to resolve portable vault root");
     let (manifest_status, startup_lockdown_reason) =
         match verify_or_create_manifest(&store.paths().root) {
@@ -87,4 +91,66 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Secure Portable Vault backend");
+}
+
+#[cfg(windows)]
+fn configure_portable_webview2_runtime() {
+    if std::env::var_os("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER").is_some() {
+        return;
+    }
+
+    let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    else {
+        return;
+    };
+
+    let fixed_runtime_root = exe_dir.join("WebView2FixedRuntime");
+    if let Some(browser_folder) = fixed_runtime_browser_folder(&fixed_runtime_root) {
+        std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", browser_folder);
+    }
+}
+
+#[cfg(not(windows))]
+fn configure_portable_webview2_runtime() {}
+
+#[cfg(windows)]
+fn fixed_runtime_browser_folder(root: &Path) -> Option<PathBuf> {
+    if root.join("msedgewebview2.exe").is_file() {
+        return Some(root.to_path_buf());
+    }
+
+    let mut child_dirs = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            path.is_dir().then_some(path)
+        })
+        .collect::<Vec<_>>();
+
+    child_dirs.sort();
+    child_dirs
+        .into_iter()
+        .find(|path| path.join("msedgewebview2.exe").is_file())
+}
+
+#[cfg(all(test, windows))]
+mod windows_webview2_tests {
+    use super::fixed_runtime_browser_folder;
+
+    #[test]
+    fn fixed_runtime_browser_folder_accepts_nested_runtime() {
+        let root =
+            std::env::temp_dir().join(format!("shield-webview2-test-{}", std::process::id()));
+        let nested = root.join("Microsoft.WebView2.FixedVersionRuntime.test.x64");
+        std::fs::create_dir_all(&nested).expect("create nested runtime dir");
+        std::fs::write(nested.join("msedgewebview2.exe"), b"test").expect("write marker exe");
+
+        let resolved = fixed_runtime_browser_folder(&root).expect("detect nested runtime");
+        assert_eq!(resolved, nested);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
