@@ -873,11 +873,14 @@ impl VaultStore {
         write_json_atomic(&self.paths.user_vault, &user_vault).await?;
 
         let mut admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
-        if !admin_vault
+        admin_vault
+            .recovery_queue
+            .retain(|entry| entry.file_id != file_id || entry.state == "PENDING_DELETE");
+        let has_pending_entry = admin_vault
             .recovery_queue
             .iter()
-            .any(|entry| entry.file_id == file_id)
-        {
+            .any(|entry| entry.file_id == file_id && entry.state == "PENDING_DELETE");
+        if !has_pending_entry {
             admin_vault.recovery_queue.push(RecoveryRecord {
                 file_id: file_id.clone(),
                 requested_by: Role::User.audit_actor().to_string(),
@@ -1002,9 +1005,20 @@ impl VaultStore {
 
     pub async fn recovery_queue(&self) -> VaultResult<Vec<RecoveryView>> {
         let admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        let user_vault: UserVaultDisk = read_json(&self.paths.user_vault).await?;
+        let pending_file_ids = user_vault
+            .files
+            .iter()
+            .filter(|record| record.state == FileState::PendingDelete)
+            .map(|record| record.file_id.as_str())
+            .collect::<HashSet<_>>();
         Ok(admin_vault
             .recovery_queue
             .into_iter()
+            .filter(|record| {
+                record.state == "PENDING_DELETE"
+                    && pending_file_ids.contains(record.file_id.as_str())
+            })
             .map(|record| RecoveryView {
                 file_id: record.file_id,
                 requested_by: record.requested_by,
@@ -1036,6 +1050,10 @@ impl VaultStore {
             ));
         }
 
+        let mut admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        let queue_index = pending_recovery_queue_index(&admin_vault.recovery_queue, &file_id)?;
+        let pending_entry = admin_vault.recovery_queue[queue_index].clone();
+
         restore_record_key_material_from_recovery(
             record,
             &keys.recovery_key,
@@ -1046,19 +1064,13 @@ impl VaultStore {
         user_vault.updated_at_unix = now_unix();
         write_json_atomic(&self.paths.user_vault, &user_vault).await?;
 
-        let mut admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
-        let mut view = None;
-        for entry in &mut admin_vault.recovery_queue {
-            if entry.file_id == file_id {
-                entry.state = "RECOVERED".to_string();
-                view = Some(RecoveryView {
-                    file_id: entry.file_id.clone(),
-                    requested_by: entry.requested_by.clone(),
-                    requested_at_unix: entry.requested_at_unix,
-                    state: entry.state.clone(),
-                });
-            }
-        }
+        admin_vault.recovery_queue.remove(queue_index);
+        let view = RecoveryView {
+            file_id: pending_entry.file_id,
+            requested_by: pending_entry.requested_by,
+            requested_at_unix: pending_entry.requested_at_unix,
+            state: "RECOVERED".to_string(),
+        };
         append_audit_record(
             &mut admin_vault,
             &keys.audit_key,
@@ -1069,7 +1081,7 @@ impl VaultStore {
         )?;
         write_json_atomic(&self.paths.admin_vault, &admin_vault).await?;
 
-        view.ok_or(VaultError::FileNotFound)
+        Ok(view)
     }
 
     pub async fn destroy_file(
@@ -1078,32 +1090,32 @@ impl VaultStore {
         file_id: String,
     ) -> VaultResult<RecoveryView> {
         let mut user_vault: UserVaultDisk = read_json(&self.paths.user_vault).await?;
-        let record = user_vault
+        let record_index = user_vault
             .files
-            .iter_mut()
-            .find(|record| record.file_id == file_id)
+            .iter()
+            .position(|record| record.file_id == file_id)
             .ok_or(VaultError::FileNotFound)?;
-        record.user_fek = None;
-        record.recovery_fek = None;
-        record.pqc = None;
-        record.state = FileState::CryptoErased;
-        record.updated_at_unix = now_unix();
+        if user_vault.files[record_index].state != FileState::PendingDelete {
+            return Err(VaultError::InvalidInput(
+                "only pending-delete files can be permanently destroyed".to_string(),
+            ));
+        }
+
+        let mut admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        let queue_index = pending_recovery_queue_index(&admin_vault.recovery_queue, &file_id)?;
+        let removed_entry = admin_vault.recovery_queue.remove(queue_index);
+
+        remove_file_chunks(&self.paths.chunks_dir, &file_id).await?;
+        user_vault.files.remove(record_index);
         user_vault.updated_at_unix = now_unix();
         write_json_atomic(&self.paths.user_vault, &user_vault).await?;
 
-        let mut admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
-        let mut view = None;
-        for entry in &mut admin_vault.recovery_queue {
-            if entry.file_id == file_id {
-                entry.state = "CRYPTO_ERASED".to_string();
-                view = Some(RecoveryView {
-                    file_id: entry.file_id.clone(),
-                    requested_by: entry.requested_by.clone(),
-                    requested_at_unix: entry.requested_at_unix,
-                    state: entry.state.clone(),
-                });
-            }
-        }
+        let view = RecoveryView {
+            file_id: removed_entry.file_id,
+            requested_by: removed_entry.requested_by,
+            requested_at_unix: removed_entry.requested_at_unix,
+            state: "CRYPTO_ERASED".to_string(),
+        };
         append_audit_record(
             &mut admin_vault,
             &keys.audit_key,
@@ -1114,7 +1126,7 @@ impl VaultStore {
         )?;
         write_json_atomic(&self.paths.admin_vault, &admin_vault).await?;
 
-        view.ok_or(VaultError::FileNotFound)
+        Ok(view)
     }
 
     pub async fn reset_user_password(
@@ -2429,6 +2441,22 @@ fn destroyed_envelope() -> AeadEnvelope {
     }
 }
 
+fn pending_recovery_queue_index(queue: &[RecoveryRecord], file_id: &str) -> VaultResult<usize> {
+    queue
+        .iter()
+        .position(|entry| entry.file_id == file_id && entry.state == "PENDING_DELETE")
+        .ok_or(VaultError::FileNotFound)
+}
+
+async fn remove_file_chunks(chunks_dir: &Path, file_id: &str) -> VaultResult<()> {
+    let file_chunks_dir = chunks_dir.join(file_id);
+    match fs::remove_dir_all(&file_chunks_dir).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(VaultError::from(error)),
+    }
+}
+
 async fn read_json<T: DeserializeOwned>(path: &Path) -> VaultResult<T> {
     let bytes = fs::read(path).await.map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -2878,6 +2906,14 @@ mod tests {
                 .await
                 .expect("recover file");
             assert_eq!(recovered.state, "RECOVERED");
+            assert!(
+                temp.store
+                    .recovery_queue()
+                    .await
+                    .expect("queue after recovery")
+                    .is_empty(),
+                "recovered files should be removed from the active recovery queue"
+            );
             assert_eq!(
                 temp.store
                     .list_files(&user_keys)
@@ -2891,12 +2927,33 @@ mod tests {
                 .delete_request(&user_keys, uploaded.file_id.clone())
                 .await
                 .expect("second delete request");
+            assert_eq!(
+                temp.store
+                    .recovery_queue()
+                    .await
+                    .expect("queue after second delete")
+                    .len(),
+                1,
+                "second delete request should create a fresh active queue entry"
+            );
             let destroyed = temp
                 .store
                 .destroy_file(&admin_keys, uploaded.file_id.clone())
                 .await
                 .expect("destroy file");
             assert_eq!(destroyed.state, "CRYPTO_ERASED");
+            assert!(
+                temp.store
+                    .recovery_queue()
+                    .await
+                    .expect("queue after destroy")
+                    .is_empty(),
+                "destroyed files should be removed from the active recovery queue"
+            );
+            assert!(
+                !chunk_dir.exists(),
+                "permanent destroy should remove the encrypted chunk directory"
+            );
             assert!(
                 temp.store
                     .list_files(&user_keys)
