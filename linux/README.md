@@ -33,30 +33,23 @@ cd linux
 
 The script sets `SECURE_VAULT_ROOT` to the project root unless you already set it yourself. That keeps development vault data in the copied project folder.
 
-## Build Release Binary
+## Build Linux AppImage
 
 ```bash
 cd linux
 ./build.sh
 ```
 
-The raw Linux binary is copied to:
+This delegates to the clean deployment builder and copies the AppImage to:
 
 ```text
-linux/dist/Start-Linux
+deployment/linux/SecurePortableVault-Linux.AppImage
 ```
 
-## Build Linux Bundles
+Requirements:
 
-```bash
-cd linux
-./build.sh --bundle
-```
+- Rust `1.77.2` or newer
+- `cargo`
+- Tauri Linux system packages listed above
 
-This installs `tauri-cli` if needed and attempts to produce AppImage and Debian packages under Tauri's bundle output. Copies are staged in:
-
-```text
-linux/dist/
-```
-
-Linux GUI builds still require the host machine's WebKitGTK runtime packages.
+If the script says Rust is too old, run `rustup update stable && rustup default stable`, then rerun `./build.sh`.

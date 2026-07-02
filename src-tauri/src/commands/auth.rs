@@ -155,11 +155,12 @@ pub async fn clear_lockdown_with_recovery_key(
     validate_recovery_key("recovery_key", &recovery_key)?;
 
     let _guard = state.vault_lock.lock().await;
-    state
+    let initialized = state
         .store
         .clear_lockdown_with_recovery_key(SecretString::new(recovery_key.trim().to_string()))
         .await
         .map_err(CommandError::from)?;
+    state.set_initialized(initialized).await;
     Ok(state.clear_runtime_lockdown().await)
 }
 

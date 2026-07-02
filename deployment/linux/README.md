@@ -15,6 +15,14 @@ From the repository root on a Linux build machine:
 ./deployment/linux/build.sh
 ```
 
+The build machine must have Rust `1.77.2` or newer. If you see a `tauri-cli requires rust ...` error, update Rust first:
+
+```bash
+rustup update stable
+rustup default stable
+rustc --version
+```
+
 End users do not need Rust, Cargo, Node, Vite, or internet access to run the AppImage. They may need to mark it executable:
 
 ```bash

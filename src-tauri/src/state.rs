@@ -44,6 +44,19 @@ impl AppState {
         runtime.mode = UiMode::Locked;
     }
 
+    pub async fn set_initialized(&self, initialized: bool) {
+        let mut runtime = self.runtime.write().await;
+        runtime.initialized = initialized;
+        if !initialized {
+            runtime.session = None;
+            runtime.clear_keys();
+            runtime.lockdown_reason = None;
+            runtime.mode = UiMode::Uninitialized;
+        } else if runtime.mode == UiMode::Uninitialized {
+            runtime.mode = UiMode::Locked;
+        }
+    }
+
     pub async fn start_user_session(&self, keys: UnlockedUserKeys) -> SessionStatus {
         let mut runtime = self.runtime.write().await;
         runtime.clear_keys();

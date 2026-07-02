@@ -950,7 +950,11 @@ document.getElementById("lockdown-recovery-form").addEventListener("submit", asy
     state.justInitialized = false;
     state.loginVisibleAfterInit = true;
     render(session);
-    showNotice("Lockdown cleared. Log in with the admin passphrase.", "success");
+    if (session.mode === "UNINITIALIZED") {
+      showNotice("Crypto-erased vault cleared. Initialize new User and Admin passphrases to continue.", "success");
+    } else {
+      showNotice("Lockdown cleared. Log in with the admin passphrase.", "success");
+    }
   } catch (error) {
     showNotice(formatError(error), "error");
   } finally {

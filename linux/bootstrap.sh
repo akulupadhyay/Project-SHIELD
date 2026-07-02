@@ -3,28 +3,52 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MIN_RUST_VERSION="1.77.2"
 
 log() {
   printf '[secure-vault/linux] %s\n' "$1"
 }
 
+version_at_least() {
+  local current="$1"
+  local required="$2"
+  [[ "$(printf '%s\n%s\n' "$required" "$current" | sort -V | head -n 1)" == "$required" ]]
+}
+
 ensure_rust() {
   if command -v cargo >/dev/null 2>&1; then
     log "Rust is available: $(cargo --version)"
-    return
+  else
+    log "Rust/cargo was not found. Installing rustup stable toolchain for this user."
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "curl is required to install rustup. Install curl and rerun this script." >&2
+      exit 1
+    fi
+
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/secure-vault-rustup-init.sh
+    sh /tmp/secure-vault-rustup-init.sh -y --profile minimal
+    # shellcheck source=/dev/null
+    source "$HOME/.cargo/env"
+    log "Rust installed: $(cargo --version)"
   fi
 
-  log "Rust/cargo was not found. Installing rustup stable toolchain for this user."
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "curl is required to install rustup. Install curl and rerun this script." >&2
+  local rust_version
+  rust_version="$(rustc --version | awk '{print $2}')"
+  if ! version_at_least "$rust_version" "$MIN_RUST_VERSION"; then
+    cat >&2 <<MSG
+Rust $MIN_RUST_VERSION or newer is required by this project.
+Current rustc: $rust_version
+
+Fix:
+  rustup update stable
+  rustup default stable
+  rustc --version
+
+Then rerun:
+  ./bootstrap.sh
+MSG
     exit 1
   fi
-
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/secure-vault-rustup-init.sh
-  sh /tmp/secure-vault-rustup-init.sh -y --profile minimal
-  # shellcheck source=/dev/null
-  source "$HOME/.cargo/env"
-  log "Rust installed: $(cargo --version)"
 }
 
 install_system_dependencies() {

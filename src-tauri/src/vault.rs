@@ -50,6 +50,7 @@ const FILE_KEY_BY_RECOVERY_KEY: &str = "secure-vault:v1:file-key:by-recovery-key
 const PQC_FILE_KEY_ALGORITHM: &str = "ML-KEM-1024+AES-256-GCM";
 const PQC_FILE_KEY_BY_SHARED_SECRET: &str = "secure-vault:v1:file-key:by-ml-kem-1024";
 const ADMIN_FAILED_LOGIN_LOCKDOWN_THRESHOLD: u32 = 5;
+const CRYPTO_ERASE_LOCKDOWN_REASON: &str = "vault cryptographic erase completed";
 
 #[derive(Clone)]
 pub struct UnlockedUserKeys {
@@ -371,16 +372,36 @@ impl VaultStore {
     pub async fn clear_lockdown_with_recovery_key(
         &self,
         recovery_key: SecretString,
-    ) -> VaultResult<()> {
-        let keys = self.unlock_admin_with_recovery_key(recovery_key).await?;
-        self.clear_lockdown(&keys).await
+    ) -> VaultResult<bool> {
+        let admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        if is_crypto_erase_lockdown(&admin_vault) {
+            self.unlock_admin_vault_key_with_recovery_key(&admin_vault, recovery_key)?;
+            self.reset_after_crypto_erase().await?;
+            return Ok(false);
+        }
+
+        let keys = self
+            .unlock_admin_with_recovery_key_from_vault(admin_vault, recovery_key)
+            .await?;
+        self.clear_lockdown(&keys).await?;
+        Ok(true)
     }
 
-    async fn unlock_admin_with_recovery_key(
+    async fn unlock_admin_with_recovery_key_from_vault(
         &self,
+        admin_vault: AdminVaultDisk,
         recovery_key: SecretString,
     ) -> VaultResult<UnlockedAdminKeys> {
-        let admin_vault: AdminVaultDisk = read_json(&self.paths.admin_vault).await?;
+        let admin_vault_key =
+            self.unlock_admin_vault_key_with_recovery_key(&admin_vault, recovery_key)?;
+        unlocked_admin_keys_from_admin_vault(&admin_vault, admin_vault_key)
+    }
+
+    fn unlock_admin_vault_key_with_recovery_key(
+        &self,
+        admin_vault: &AdminVaultDisk,
+        recovery_key: SecretString,
+    ) -> VaultResult<KeyMaterial> {
         let recovery = admin_vault.admin_recovery.as_ref().ok_or_else(|| {
             VaultError::InvalidInput(
                 "admin recovery key has not been provisioned; log in as admin once first"
@@ -388,12 +409,11 @@ impl VaultStore {
             )
         })?;
         let recovery_kek = derive_key(&recovery_key, &recovery.kdf)?;
-        let admin_vault_key = unwrap_key(
+        unwrap_key(
             &recovery_kek,
             &recovery.admin_vault_key_wrapped_by_recovery_key,
             ADMIN_VAULT_KEY_BY_ADMIN_RECOVERY_KEY,
-        )?;
-        unlocked_admin_keys_from_admin_vault(&admin_vault, admin_vault_key)
+        )
     }
 
     pub async fn record_auth_event(
@@ -1142,6 +1162,13 @@ impl VaultStore {
         write_json_atomic(&self.paths.admin_vault, &admin_vault).await
     }
 
+    async fn reset_after_crypto_erase(&self) -> VaultResult<()> {
+        if fs::try_exists(&self.paths.data_dir).await? {
+            fs::remove_dir_all(&self.paths.data_dir).await?;
+        }
+        Ok(())
+    }
+
     pub async fn export_custody_report(
         &self,
         keys: &UnlockedAdminKeys,
@@ -1233,7 +1260,7 @@ impl VaultStore {
         admin_vault.recovery_key_wrapped_by_admin_vault = destroyed_envelope();
         admin_vault.user_vault_key_wrapped_by_recovery_key = destroyed_envelope();
         admin_vault.lockdown = Some(LockdownRecord {
-            reason: "vault cryptographic erase completed".to_string(),
+            reason: CRYPTO_ERASE_LOCKDOWN_REASON.to_string(),
             triggered_at_unix: now_unix(),
         });
         admin_vault.updated_at_unix = now_unix();
@@ -1905,6 +1932,19 @@ fn unlocked_admin_keys_from_admin_vault(
         recovery_key,
         user_vault_key,
     })
+}
+
+fn is_crypto_erase_lockdown(admin_vault: &AdminVaultDisk) -> bool {
+    admin_vault
+        .lockdown
+        .as_ref()
+        .map(|lockdown| lockdown.reason == CRYPTO_ERASE_LOCKDOWN_REASON)
+        .unwrap_or(false)
+        && is_destroyed_envelope(&admin_vault.admin_credential.wrapped_vault_key)
+}
+
+fn is_destroyed_envelope(envelope: &AeadEnvelope) -> bool {
+    envelope.nonce_b64.is_empty() && envelope.ciphertext_b64.is_empty()
 }
 
 fn push_auth_event(admin_vault: &mut AdminVaultDisk, role: Role, status: &str, reason_code: &str) {
@@ -2675,6 +2715,52 @@ mod tests {
             .authenticate_admin(SecretString::new(new_admin_passphrase.to_string()))
             .await
             .expect("admin should authenticate after recovery lockdown clear");
+    }
+
+    #[tokio::test]
+    async fn recovery_key_clears_crypto_erase_lockdown_to_uninitialized() {
+        let temp = TempVault::new("crypto-erase-recovery-clear");
+        temp.initialize().await;
+
+        let admin_passphrase = SecretString::new(ADMIN_PASS.to_string());
+        let admin_keys = temp
+            .store
+            .authenticate_admin(admin_passphrase.clone())
+            .await
+            .expect("admin auth");
+        let recovery = temp
+            .store
+            .ensure_admin_recovery_key(&admin_keys, &admin_passphrase)
+            .await
+            .expect("provision recovery key")
+            .expect("first admin login should display recovery key");
+
+        temp.store
+            .crypto_erase_vault(&admin_keys, "CRYPTO ERASE VAULT".to_string())
+            .await
+            .expect("crypto erase");
+        assert!(
+            temp.store
+                .persistent_lockdown_reason()
+                .await
+                .expect("read lockdown")
+                .is_some(),
+            "crypto erase should persist lockdown before recovery clear"
+        );
+
+        let initialized = temp
+            .store
+            .clear_lockdown_with_recovery_key(SecretString::new(recovery.recovery_key))
+            .await
+            .expect("recovery key should clear crypto-erase lockdown");
+        assert!(
+            !initialized,
+            "clearing crypto-erase lockdown should reset the vault to first-run initialization"
+        );
+        assert!(
+            !temp.store.is_initialized().await.expect("read init state"),
+            "crypto-erased vault files should be removed after authorized recovery clear"
+        );
     }
 
     #[tokio::test]
