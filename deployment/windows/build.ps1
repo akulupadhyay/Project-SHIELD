@@ -7,8 +7,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Split-Path -Parent $scriptDir
-$windowsDir = Join-Path $scriptDir "windows"
+$deploymentRoot = Split-Path -Parent $scriptDir
+$repoRoot = Split-Path -Parent $deploymentRoot
+$windowsDir = $scriptDir
 $releaseExe = Join-Path $repoRoot "target\release\secure-vault.exe"
 $deployExe = Join-Path $windowsDir $OutputName
 $hashPath = "$deployExe.sha256"

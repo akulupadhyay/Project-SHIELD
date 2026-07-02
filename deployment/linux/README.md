@@ -12,7 +12,7 @@ SecurePortableVault-Linux.AppImage.sha256
 From the repository root on a Linux build machine:
 
 ```bash
-./deployment/build-linux.sh
+./deployment/linux/build.sh
 ```
 
 End users do not need Rust, Cargo, Node, Vite, or internet access to run the AppImage. They may need to mark it executable:

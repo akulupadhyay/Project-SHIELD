@@ -8,10 +8,16 @@ For fully offline systems that do not already have Microsoft WebView2 installed,
 WebView2FixedRuntime/
 ```
 
-Build that folder from the repository root with:
+Build or refresh this folder from the repository root with:
 
 ```powershell
-C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File .\deployment\build-windows.ps1 -FixedRuntimePath "C:\Path\To\Extracted\Microsoft.WebView2.FixedVersionRuntime"
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File .\deployment\windows\build.ps1
+```
+
+For fully offline systems without WebView2 installed, populate the fixed runtime folder:
+
+```powershell
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -File .\deployment\windows\build.ps1 -FixedRuntimePath "C:\Path\To\Extracted\Microsoft.WebView2.FixedVersionRuntime"
 ```
 
 Runtime vault files are created beside the EXE:

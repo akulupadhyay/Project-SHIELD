@@ -13,7 +13,7 @@ SecurePortableVault-macOS-aarch64-apple-darwin.app.zip
 From the repository root on a Mac:
 
 ```bash
-./deployment/build-macos.sh
+./deployment/macos/build.sh
 ```
 
 On Apple Silicon such as an M3 MacBook Air, the script builds `aarch64-apple-darwin`. On Intel macOS, it builds `x86_64-apple-darwin`.
