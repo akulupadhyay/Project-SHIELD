@@ -5,8 +5,10 @@ This folder is reserved for portable release artifacts.
 ## Current Artifact
 
 - Windows: `windows/SecurePortableVault-Windows.exe`
-- macOS: not built on this Windows workstation
-- Linux: not built on this Windows workstation
+- Linux: build on Linux with `./deployment/build-linux.sh`
+- macOS: build on macOS with `./deployment/build-macos.sh`
+
+This Windows workstation can generate the Windows EXE only. It cannot generate valid Linux AppImage or macOS `.app`/`.dmg` artifacts because Tauri desktop bundles are platform-native GUI builds.
 
 ## Windows Offline Behavior
 
@@ -42,6 +44,41 @@ For the machine that only runs the deployed app:
 - Visual Studio Build Tools are not required
 - Node/Vite/TypeScript are not required
 - Internet is not required if WebView2 Fixed Runtime is bundled in the deployment folder
+
+## Linux Portable Artifact
+
+Build on Linux:
+
+```bash
+./deployment/build-linux.sh
+```
+
+Output:
+
+```text
+deployment/linux/SecurePortableVault-Linux.AppImage
+deployment/linux/SecurePortableVault-Linux.AppImage.sha256
+```
+
+The AppImage is the Linux single-file portable executable format. It bundles the app and dependencies for easier distribution, but it should be built on the oldest Linux baseline you intend to support because glibc compatibility depends on the build host. Ubuntu 22.04 or Debian 12 are good Tauri v2 baselines.
+
+## macOS Portable Artifact
+
+Build on macOS:
+
+```bash
+./deployment/build-macos.sh
+```
+
+Output on Apple Silicon:
+
+```text
+deployment/macos/Secure Portable Vault.app
+deployment/macos/SecurePortableVault-macOS-aarch64-apple-darwin.dmg
+deployment/macos/SecurePortableVault-macOS-aarch64-apple-darwin.app.zip
+```
+
+macOS applications are distributed as `.app` bundles or `.dmg` disk images, not as Windows-style single `.exe` files. macOS provides the system webview runtime, so end users do not need Rust, Cargo, Node, Vite, or internet access to run the built app. Unsigned builds may be blocked by Gatekeeper until the app is Developer ID signed and notarized.
 
 ## WebView2 Runtime Options
 
