@@ -280,6 +280,7 @@ function render(session) {
 
   if (!state.busy) {
     document.getElementById("logout-button").disabled = !session.authenticated;
+    syncLoginSecondaryControls();
     syncUploadControls();
   }
 }
@@ -793,15 +794,13 @@ function formatSecuritySummary(summary) {
   const groups = [
     ["Storage", [
       `Vault root: ${summary.vault_root}`,
-      `Manifest: ${summary.manifest_path}`,
       `User vault: ${summary.user_vault_path}`,
       `Admin vault: ${summary.admin_vault_path}`,
       `Chunks: ${summary.chunks_dir}`
     ]],
     ["Encryption", summary.encryption_summary || []],
     ["Local Key Storage", summary.key_storage_summary || []],
-    ["Runtime Unlocking", summary.runtime_key_summary || []],
-    ["Manifest / Dev Mode", summary.manifest_summary || []]
+    ["Runtime Unlocking", summary.runtime_key_summary || []]
   ];
 
   return groups
@@ -852,6 +851,19 @@ document.getElementById("show-login-after-init").addEventListener("click", () =>
     render(state.session);
   }
   showNotice("Login form is ready.", "success");
+});
+
+function syncLoginSecondaryControls() {
+  const container = document.getElementById("login-secondary-container");
+  const isAdminLogin = document.getElementById("login-role").value === "ADMIN";
+  container.hidden = !isAdminLogin;
+  if (!isAdminLogin) {
+    els.adminResetForm.hidden = true;
+  }
+}
+
+document.getElementById("login-role").addEventListener("change", () => {
+  syncLoginSecondaryControls();
 });
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {

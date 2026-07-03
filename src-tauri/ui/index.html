@@ -24,7 +24,7 @@
           <span class="label">Session</span>
           <strong id="session-summary">Loading</strong>
         </div>
-        <div>
+        <div hidden>
           <span class="label">Manifest</span>
           <strong id="manifest-summary">Loading</strong>
         </div>
@@ -32,7 +32,7 @@
           <span class="label">Storage Root</span>
           <strong id="storage-summary">Loading</strong>
         </div>
-        <div>
+        <div hidden>
           <span class="label">Allowed Actions</span>
           <strong id="actions-summary">Loading</strong>
         </div>
@@ -84,7 +84,7 @@
             </label>
             <button type="submit">Login</button>
           </form>
-          <div class="login-secondary">
+          <div class="login-secondary" id="login-secondary-container" hidden>
             <button id="show-admin-reset" type="button" class="link-button">Reset admin passphrase</button>
           </div>
           <form id="admin-reset-form" class="secondary-form" autocomplete="off" hidden>
@@ -176,16 +176,19 @@
             <p>Audit, recovery, tamper review, password reset, and destruction controls.</p>
           </div>
 
-          <div class="admin-actions">
-            <button id="load-audit" type="button">Audit Logs</button>
-            <button id="load-recovery" type="button">Recovery Queue</button>
-            <button id="load-alerts" type="button">Tamper Alerts</button>
-            <button id="show-clear-lockdown" type="button">Clear Lockdown</button>
-            <button id="show-reset-password" type="button">Reset Password</button>
-            <button id="show-export-report" type="button">Export Report</button>
-            <button id="show-security-summary" type="button">Security &amp; Keys</button>
-            <button id="show-erase-vault" type="button">Crypto-Erase</button>
-          </div>
+          <div class="admin-layout">
+            <div class="admin-sidebar">
+              <div class="admin-actions">
+                <button id="load-audit" type="button">Audit Logs</button>
+                <button id="load-recovery" type="button">Recovery Queue</button>
+                <button id="load-alerts" type="button">Tamper Alerts</button>
+                <button id="show-clear-lockdown" type="button">Clear Lockdown</button>
+                <button id="show-reset-password" type="button">Reset Password</button>
+                <button id="show-export-report" type="button">Export Report</button>
+                <button id="show-security-summary" type="button">Security &amp; Keys</button>
+                <button id="show-erase-vault" type="button">Crypto-Erase</button>
+              </div>
+            </div>
 
           <div class="admin-workspace">
             <section class="admin-section" id="admin-placeholder" data-admin-section="placeholder">
@@ -289,7 +292,8 @@
               </form>
             </section>
           </div>
-        </section>
+        </div>
+      </section>
 
         <section class="panel lockdown-panel" id="lockdown-panel" hidden>
           <div class="section-head">
